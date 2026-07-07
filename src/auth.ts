@@ -2,7 +2,7 @@
 // consent page in the browser and catch the redirect on 127.0.0.1. No third
 // party server ever sees the tokens; everything stays on this machine.
 
-import { createServer } from "http";
+import { Platform } from "obsidian";
 import type { Server } from "http";
 
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -13,10 +13,18 @@ export interface AuthResult {
   redirectUri: string;
 }
 
-export function startLoopbackAuth(
+export async function startLoopbackAuth(
   clientId: string,
   onUrl: (url: string) => void
 ): Promise<AuthResult> {
+  if (!Platform.isDesktopApp) {
+    throw new Error(
+      "Sign in on a desktop first, then move the connection to this device with the connection code in settings."
+    );
+  }
+  // Imported lazily so the plugin loads cleanly on mobile, where this code
+  // path is never taken.
+  const { createServer } = (await import("http")) as typeof import("http");
   return new Promise((resolve, reject) => {
     let server: Server | null = null;
     const timeout = setTimeout(() => {

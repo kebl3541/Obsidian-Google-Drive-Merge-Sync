@@ -54,12 +54,20 @@ only where both sides changed the same words does it keep yours and say so.
 - On a second device, install the plugin, connect with the same Google
   account, set the same folder name, and sync.
 
+## Mobile
+
+Sign in once on a desktop, then in settings copy the connection code and paste
+it into the same setting on your phone or tablet. The device syncs from then
+on without any browser dance. Treat the code like a password.
+
+## Renames
+
+Renames sync as renames on both sides: links keep pointing at the note, and
+Drive keeps the file's history. When two renamed files are indistinguishable,
+the plugin falls back to the safe delete plus create rather than guess.
+
 ## Honest limits
 
-- Desktop only for now: the sign in flow needs a local listener that mobile
-  Obsidian does not allow. Mobile support is planned via a different flow.
-- Renames are treated as delete plus create, which is safe but loses edit
-  history on the renamed path for that one sync.
 - Very large vaults sync fine but the first pass uploads everything.
 
 ## Support

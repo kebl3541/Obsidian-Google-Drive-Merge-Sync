@@ -190,6 +190,20 @@ export class DriveClient {
     return res.json as { id: string; md5Checksum?: string };
   }
 
+  // Rename and, if needed, move a file to a different parent folder.
+  async move(fileId: string, newName: string, newParentId: string): Promise<void> {
+    const cur = await this.call(`${API}/files/${fileId}?fields=parents`);
+    const parents = ((cur.json as { parents?: string[] }).parents ?? []).join(",");
+    const q = parents
+      ? `?addParents=${newParentId}&removeParents=${parents}`
+      : `?addParents=${newParentId}`;
+    await this.call(`${API}/files/${fileId}${q}`, {
+      method: "PATCH",
+      contentType: "application/json",
+      body: JSON.stringify({ name: newName }),
+    });
+  }
+
   async trash(fileId: string): Promise<void> {
     await this.call(`${API}/files/${fileId}`, {
       method: "PATCH",

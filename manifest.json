@@ -1,7 +1,7 @@
 {
   "id": "drive-merge-sync",
   "name": "Drive Merge Sync",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minAppVersion": "1.7.2",
   "description": "Sync your vault with Google Drive using your own credentials. Text conflicts resolve by word level three way merge instead of conflicted copies, and deletes go to trash, never into the void.",
   "author": "kebl3541",
@@ -10,5 +10,5 @@
     "Buy Me a Coffee": "https://buymeacoffee.com/philosophizer",
     "PayPal": "https://www.paypal.com/donate/?business=berlin.philosophy%40gmail.com&no_recurring=0&currency_code=EUR"
   },
-  "isDesktopOnly": true
+  "isDesktopOnly": false
 }

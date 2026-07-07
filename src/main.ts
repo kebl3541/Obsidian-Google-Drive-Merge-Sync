@@ -112,6 +112,43 @@ export default class DriveMergeSyncPlugin extends Plugin {
 
   // ---- Connection -----------------------------------------------------------
 
+  exportConnectionCode(): string | null {
+    if (!this.tokens) return null;
+    const payload = {
+      clientId: this.settings.clientId,
+      clientSecret: this.settings.clientSecret,
+      tokens: this.tokens,
+      rootFolderId: this.rootFolderId,
+      driveFolderName: this.settings.driveFolderName,
+    };
+    return btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+  }
+
+  async importConnectionCode(code: string): Promise<boolean> {
+    try {
+      const payload = JSON.parse(
+        decodeURIComponent(escape(atob(code.trim())))
+      ) as {
+        clientId: string;
+        clientSecret: string;
+        tokens: DriveTokens;
+        rootFolderId: string | null;
+        driveFolderName: string;
+      };
+      if (!payload.tokens?.refreshToken) return false;
+      this.settings.clientId = payload.clientId;
+      this.settings.clientSecret = payload.clientSecret;
+      this.settings.driveFolderName = payload.driveFolderName ?? "";
+      this.tokens = payload.tokens;
+      this.rootFolderId = payload.rootFolderId;
+      await this.persist();
+      this.setStatus("connected");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async connect() {
     if (!this.settings.clientId || !this.settings.clientSecret) {
       new Notice("Enter your Google client ID and secret first (see the setup guide in settings).");
@@ -213,7 +250,12 @@ export default class DriveMergeSyncPlugin extends Plugin {
       const actions = planSync(this.base, local, remote);
       if (dryRun) {
         const summary = actions.length
-          ? actions.map((a) => `${a.kind}: ${a.path}`).slice(0, 30).join("\n")
+          ? actions
+              .map((a) =>
+                "path" in a ? `${a.kind}: ${a.path}` : `${a.kind}: ${a.from} → ${a.to}`
+              )
+              .slice(0, 30)
+              .join("\n")
           : "Nothing to do; everything is in sync.";
         new Notice(`Dry run (${actions.length} actions):\n${summary}`, 10000);
         this.setStatus("ready");
@@ -262,6 +304,16 @@ export default class DriveMergeSyncPlugin extends Plugin {
     return this.app.vault.adapter.read(p);
   }
 
+  private async moveBaseCopy(from: string, to: string) {
+    const dir = this.baseDir();
+    const src = `${dir}/${this.baseSlug(from)}`;
+    if (await this.app.vault.adapter.exists(src)) {
+      const content = await this.app.vault.adapter.read(src);
+      await this.app.vault.adapter.write(`${dir}/${this.baseSlug(to)}`, content);
+      await this.app.vault.adapter.remove(src);
+    }
+  }
+
   private async writeBaseCopy(path: string, content: string) {
     const dir = this.baseDir();
     if (!(await this.app.vault.adapter.exists(dir))) {
@@ -277,10 +329,52 @@ export default class DriveMergeSyncPlugin extends Plugin {
     onMerge: () => void
   ) {
     const rootId = this.rootFolderId as string;
-    const parts = action.path.split("/");
+    const actionPath = "path" in action ? action.path : action.to;
+    const parts = actionPath.split("/");
     const name = parts.pop() as string;
+    void name;
 
     switch (action.kind) {
+      case "renameRemote": {
+        const toParts = action.to.split("/");
+        const toName = toParts.pop() as string;
+        const parentId = await drive.ensurePath(rootId, toParts, folderCache);
+        await drive.move(action.fileId, toName, parentId);
+        const entry = this.base[action.from];
+        delete this.base[action.from];
+        const f = this.app.vault.getAbstractFileByPath(action.to);
+        this.base[action.to] = {
+          fileId: action.fileId,
+          localMtime: f instanceof TFile ? f.stat.mtime : entry?.localMtime ?? 0,
+          localSize: f instanceof TFile ? f.stat.size : entry?.localSize,
+          remoteRev: entry?.remoteRev ?? "",
+        };
+        await this.moveBaseCopy(action.from, action.to);
+        return;
+      }
+
+      case "renameLocal": {
+        const from = this.app.vault.getAbstractFileByPath(action.from);
+        if (from instanceof TFile) {
+          const toParts = action.to.split("/");
+          toParts.pop();
+          await this.ensureLocalFolders(toParts);
+          // fileManager keeps links pointing at the renamed note.
+          await this.app.fileManager.renameFile(from, normalizePath(action.to));
+        }
+        const entry = this.base[action.from];
+        delete this.base[action.from];
+        const f = this.app.vault.getAbstractFileByPath(action.to);
+        this.base[action.to] = {
+          fileId: action.fileId,
+          localMtime: f instanceof TFile ? f.stat.mtime : 0,
+          localSize: f instanceof TFile ? f.stat.size : undefined,
+          remoteRev: entry?.remoteRev ?? "",
+        };
+        await this.moveBaseCopy(action.from, action.to);
+        return;
+      }
+
       case "uploadNew":
       case "uploadUpdate": {
         const file = this.app.vault.getAbstractFileByPath(action.path);
@@ -288,7 +382,7 @@ export default class DriveMergeSyncPlugin extends Plugin {
         const content = await this.app.vault.readBinary(file);
         const parentId = await drive.ensurePath(rootId, parts, folderCache);
         const uploaded = await drive.upload(
-          name,
+          name as string,
           parentId,
           content,
           action.kind === "uploadUpdate" ? action.fileId : undefined
@@ -296,6 +390,7 @@ export default class DriveMergeSyncPlugin extends Plugin {
         this.base[action.path] = {
           fileId: uploaded.id,
           localMtime: file.stat.mtime,
+          localSize: file.stat.size,
           remoteRev: uploaded.md5Checksum ?? "",
         };
         if (this.isTextPath(action.path)) {
@@ -319,6 +414,7 @@ export default class DriveMergeSyncPlugin extends Plugin {
           this.base[action.path] = {
             fileId: action.fileId,
             localMtime: f.stat.mtime,
+            localSize: f.stat.size,
             remoteRev: "", // filled by rebuildBase
           };
           if (this.isTextPath(action.path)) {
@@ -502,6 +598,35 @@ class DriveMergeSettingTab extends PluginSettingTab {
           new Notice("Disconnected.");
         })
       );
+
+    new Setting(containerEl)
+      .setName("Connection code")
+      .setDesc(
+        "Move this connection to another device (phone or tablet): copy the code here, paste it in the same setting there. Treat the code like a password."
+      )
+      .addButton((b) =>
+        b.setButtonText("Copy code").onClick(async () => {
+          const code = this.plugin.exportConnectionCode();
+          if (!code) {
+            new Notice("Connect Google Drive first.");
+            return;
+          }
+          await navigator.clipboard.writeText(code);
+          new Notice("Connection code copied. Paste it on your other device.");
+        })
+      )
+      .addText((t) => {
+        t.setPlaceholder("Paste a code from another device");
+        t.inputEl.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void this.plugin.importConnectionCode(t.getValue()).then((ok) => {
+              new Notice(ok ? "Connected from code." : "That code did not work.");
+              if (ok) t.setValue("");
+            });
+          }
+        });
+      });
 
     new Setting(containerEl)
       .setName("Drive folder name")

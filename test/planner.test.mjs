@@ -127,3 +127,40 @@ t("mixed tree plans deterministically", () => {
 });
 
 console.log(`planner: ${count} tests passed`);
+
+t("local rename becomes renameRemote", () => {
+  const base = { "old.md": { fileId: "x", localMtime: 10, localSize: 7, remoteRev: "r1" } };
+  const local = { "new.md": { mtime: 10, size: 7 } };
+  const remote = { "old.md": { fileId: "x", rev: "r1", size: 7 } };
+  assert.deepEqual(planSync(base, local, remote), [
+    { kind: "renameRemote", from: "old.md", to: "new.md", fileId: "x" },
+  ]);
+});
+
+t("remote rename becomes renameLocal", () => {
+  const base = { "old.md": { fileId: "x", localMtime: 10, localSize: 7, remoteRev: "r1" } };
+  const local = { "old.md": { mtime: 10, size: 7 } };
+  const remote = { "new.md": { fileId: "x", rev: "r1", size: 7 } };
+  assert.deepEqual(planSync(base, local, remote), [
+    { kind: "renameLocal", from: "old.md", to: "new.md", fileId: "x" },
+  ]);
+});
+
+t("ambiguous rename falls back to delete plus create", () => {
+  const base = {
+    "a.md": { fileId: "x", localMtime: 10, localSize: 7, remoteRev: "r1" },
+    "b.md": { fileId: "y", localMtime: 10, localSize: 7, remoteRev: "r2" },
+  };
+  const local = {
+    "c.md": { mtime: 10, size: 7 },
+    "d.md": { mtime: 10, size: 7 },
+  };
+  const remote = {
+    "a.md": { fileId: "x", rev: "r1", size: 7 },
+    "b.md": { fileId: "y", rev: "r2", size: 7 },
+  };
+  const kindsOnly = planSync(base, local, remote).map((a) => a.kind).sort();
+  assert.deepEqual(kindsOnly, ["deleteRemote", "deleteRemote", "uploadNew", "uploadNew"]);
+});
+
+console.log(`planner extended: ${count} total`);
