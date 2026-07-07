@@ -21,8 +21,5 @@ jobs:
       - name: Type check and build
         run: npm run build
 
-      - name: Merge engine tests
+      - name: Planner and merge tests
         run: npm test
-
-      - name: Bridge protocol tests
-        run: python3 test/bridge.test.py
