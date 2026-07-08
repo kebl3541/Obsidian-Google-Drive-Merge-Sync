@@ -28,7 +28,9 @@ continued development, please use the buttons below:</p>
 - **Every sync starts with a plan.** The plugin compares three states of each
   file: your local copy, the Drive copy, and the last version both sides
   agreed on. From those it decides, per file, whether to upload, download,
-  merge, rename, or do nothing. You can see the plan without running it: the
+  merge, rename, or do nothing. On the very first sync there is no shared
+  history yet, so the whole vault uploads; every sync after that transfers
+  only what changed. You can see the plan without running it: the
   dry run command lists exactly what a sync would do before it does anything.
 - **Conflicts are merged, not duplicated.** When the same note changed on two
   devices, the two versions are combined by a word level three way merge
@@ -77,17 +79,13 @@ Renames sync as renames on both sides: links keep pointing at the note, and
 Drive keeps the file's history. When two renamed files are indistinguishable,
 the plugin falls back to the safe delete plus create rather than guess.
 
-## Honest limits
-
-- Very large vaults sync fine but the first pass uploads everything.
-
 ## Security and privacy
 
 Points Obsidian's automated plugin review flags, and what they mean here:
 
-- **Vault enumeration**: a sync plugin has one job — compare every local file with its remote counterpart — so it necessarily lists the vault's files each sync. Folders you exclude in settings are skipped. File contents are read only to upload, download, or merge them.
+- **Vault enumeration**: a sync plugin has one job, comparing every local file with its remote counterpart, so it necessarily lists the vault's files each sync. Folders you exclude in settings are skipped. File contents are read only to upload, download, or merge them.
 - **Clipboard**: written to exactly once, when you click "Copy connection code" to move your connection to another device. The plugin never reads the clipboard.
-- **Where your data goes**: only to Google Drive, over your own OAuth client with the narrow `drive.file` scope, meaning the plugin can only ever see the folder it created — nothing else in your Drive. Tokens stay on your machine; no third-party server is involved, ever.
+- **Where your data goes**: only to Google Drive, over your own OAuth client with the narrow `drive.file` scope, meaning the plugin can only ever see the folder it created and nothing else in your Drive. Tokens stay on your machine; no third-party server is involved, ever.
 
 ## Support
 
