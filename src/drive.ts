@@ -2,7 +2,7 @@
 // Scope drive.file: the plugin only ever sees files and folders it created,
 // which is exactly the vault mirror and nothing else in anyone's Drive.
 
-import { requestUrl } from "obsidian";
+import { type RequestUrlResponse, requestUrl } from "obsidian";
 
 const API = "https://www.googleapis.com/drive/v3";
 const UPLOAD = "https://www.googleapis.com/upload/drive/v3";
@@ -21,7 +21,7 @@ const DEFAULT_ENDPOINTS: DriveEndpoints = {
   token: TOKEN_URL,
 };
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
 
 export interface DriveTokens {
   accessToken: string;
@@ -119,7 +119,7 @@ export class DriveClient {
     for (let attempt = 0; attempt < 4; attempt++) {
       if (attempt > 0) await sleep(500 * 2 ** attempt);
       const t = await this.token();
-      let res;
+      let res: RequestUrlResponse;
       try {
         res = await requestUrl({
           url,
@@ -140,7 +140,9 @@ export class DriveClient {
       }
       throw new Error(`Drive returned ${res.status} for ${url.split("?")[0]}`);
     }
-    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+    throw lastErr instanceof Error
+      ? lastErr
+      : new Error("Drive request failed after retries.");
   }
 
   async ensureFolder(name: string, parentId?: string): Promise<string> {

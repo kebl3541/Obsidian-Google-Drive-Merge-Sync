@@ -22,6 +22,8 @@ async function requestUrl(opts) {
   }
   return { status: res.status, arrayBuffer, text, json };
 }
+if (typeof globalThis.window === "undefined")
+  globalThis.window = globalThis;
 
 // src/drive.ts
 var API = "https://www.googleapis.com/drive/v3";
@@ -32,7 +34,7 @@ var DEFAULT_ENDPOINTS = {
   upload: UPLOAD,
   token: TOKEN_URL
 };
-var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+var sleep = (ms) => new Promise((r) => window.setTimeout(r, ms));
 var DriveClient = class {
   constructor(clientId, clientSecret, tokens, onTokens, endpoints) {
     this.clientId = clientId;
@@ -121,7 +123,7 @@ var DriveClient = class {
       }
       throw new Error(`Drive returned ${res.status} for ${url.split("?")[0]}`);
     }
-    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+    throw lastErr instanceof Error ? lastErr : new Error("Drive request failed after retries.");
   }
   async ensureFolder(name, parentId) {
     const parent = parentId ?? "root";

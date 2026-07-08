@@ -70,6 +70,14 @@ the plugin falls back to the safe delete plus create rather than guess.
 
 - Very large vaults sync fine but the first pass uploads everything.
 
+## Security and privacy
+
+Points Obsidian's automated plugin review flags, and what they mean here:
+
+- **Vault enumeration**: a sync plugin has one job — compare every local file with its remote counterpart — so it necessarily lists the vault's files each sync. Folders you exclude in settings are skipped. File contents are read only to upload, download, or merge them.
+- **Clipboard**: written to exactly once, when you click "Copy connection code" to move your connection to another device. The plugin never reads the clipboard.
+- **Where your data goes**: only to Google Drive, over your own OAuth client with the narrow `drive.file` scope, meaning the plugin can only ever see the folder it created — nothing else in your Drive. Tokens stay on your machine; no third-party server is involved, ever.
+
 ## Support
 
 If this plugin adds value for you and you would like to help support continued

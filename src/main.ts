@@ -50,6 +50,21 @@ function bytesEqual(a: ArrayBuffer, b: ArrayBuffer): boolean {
   return true;
 }
 
+/** UTF-8 safe base64, replacing the deprecated escape/unescape idiom. */
+function b64EncodeUtf8(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+function b64DecodeUtf8(b64: string): string {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
 export default class DriveMergeSyncPlugin extends Plugin {
   settings: DriveMergeSettings = DEFAULT_SETTINGS;
   private tokens: DriveTokens | null = null;
@@ -143,14 +158,12 @@ export default class DriveMergeSyncPlugin extends Plugin {
       rootFolderId: this.rootFolderId,
       driveFolderName: this.settings.driveFolderName,
     };
-    return btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+    return b64EncodeUtf8(JSON.stringify(payload));
   }
 
   async importConnectionCode(code: string): Promise<boolean> {
     try {
-      const payload = JSON.parse(
-        decodeURIComponent(escape(atob(code.trim())))
-      ) as {
+      const payload = JSON.parse(b64DecodeUtf8(code.trim())) as {
         clientId: string;
         clientSecret: string;
         tokens: DriveTokens;
@@ -299,7 +312,8 @@ export default class DriveMergeSyncPlugin extends Plugin {
 
       // Folder creation must not race, so all needed remote folders are
       // ensured up front, one by one, before the parallel phase.
-      const rootId = this.rootFolderId as string;
+      const rootId = this.rootFolderId;
+      if (!rootId) throw new Error("Drive folder is not initialized yet.");
       for (const a of transfers) {
         if (a.kind === "uploadNew" || a.kind === "uploadUpdate") {
           const parts = a.path.split("/");
@@ -385,16 +399,18 @@ export default class DriveMergeSyncPlugin extends Plugin {
     remote: Record<string, RemoteEntry>,
     onMerge: () => void
   ) {
-    const rootId = this.rootFolderId as string;
+    const rootId = this.rootFolderId;
+    if (!rootId) throw new Error("Drive folder is not initialized yet.");
     const actionPath = "path" in action ? action.path : action.to;
     const parts = actionPath.split("/");
-    const name = parts.pop() as string;
-    void name;
+    const name = parts.pop();
+    if (!name) return;
 
     switch (action.kind) {
       case "renameRemote": {
         const toParts = action.to.split("/");
-        const toName = toParts.pop() as string;
+        const toName = toParts.pop();
+        if (!toName) return;
         const parentId = await drive.ensurePath(rootId, toParts, folderCache);
         await drive.move(action.fileId, toName, parentId);
         const entry = this.base[action.from];
@@ -439,7 +455,7 @@ export default class DriveMergeSyncPlugin extends Plugin {
         const content = await this.app.vault.readBinary(file);
         const parentId = await drive.ensurePath(rootId, parts, folderCache);
         const uploaded = await drive.upload(
-          name as string,
+          name,
           parentId,
           content,
           action.kind === "uploadUpdate" ? action.fileId : undefined
@@ -484,8 +500,8 @@ export default class DriveMergeSyncPlugin extends Plugin {
 
       case "deleteLocal": {
         const file = this.app.vault.getAbstractFileByPath(action.path);
-        // To Obsidian's trash, never gone for good.
-        if (file) await this.app.vault.trash(file, false);
+        // Trashed per the user's "deleted files" preference, never silently gone.
+        if (file) await this.app.fileManager.trashFile(file);
         delete this.base[action.path];
         return;
       }
@@ -559,8 +575,10 @@ export default class DriveMergeSyncPlugin extends Plugin {
     // Binary conflict: newer side wins, the loser survives as a conflict copy.
     if (file.stat.mtime >= remoteMtime) {
       const parts = path.split("/");
-      const name = parts.pop() as string;
-      const parentId = await drive.ensurePath(this.rootFolderId as string, parts, folderCache);
+      const name = parts.pop();
+      const rootId = this.rootFolderId;
+      if (!name || !rootId) return;
+      const parentId = await drive.ensurePath(rootId, parts, folderCache);
       const up = await drive.upload(name, parentId, localBytes, fileId);
       this.base[path] = {
         fileId: up.id,
@@ -599,14 +617,14 @@ export default class DriveMergeSyncPlugin extends Plugin {
     file: TFile
   ) {
     const parts = path.split("/");
-    const name = parts.pop() as string;
-    const parentId = await drive.ensurePath(this.rootFolderId as string, parts, folderCache);
-    const up = await drive.upload(
-      name,
-      parentId,
-      new TextEncoder().encode(content).buffer as ArrayBuffer,
-      fileId
-    );
+    const name = parts.pop();
+    const rootId = this.rootFolderId;
+    if (!name || !rootId) return;
+    const parentId = await drive.ensurePath(rootId, parts, folderCache);
+    const bytes = new TextEncoder().encode(content);
+    const body = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(body).set(bytes);
+    const up = await drive.upload(name, parentId, body, fileId);
     const st = await this.freshStat(file);
     this.base[path] = {
       fileId: up.id,
@@ -629,7 +647,9 @@ export default class DriveMergeSyncPlugin extends Plugin {
 
   // After executing, re-list the remote so base holds true revisions.
   private async rebuildBase(drive: DriveClient) {
-    const remoteTree = await drive.listTree(this.rootFolderId as string);
+    const rootId = this.rootFolderId;
+    if (!rootId) return;
+    const remoteTree = await drive.listTree(rootId);
     for (const [path, f] of remoteTree) {
       const entry = this.base[path];
       if (entry) {
@@ -723,7 +743,7 @@ class DriveMergeSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Drive folder name")
-      .setDesc("The folder created in your Drive. Empty: your vault's name.")
+      .setDesc("Name of the sync folder in your drive; leave empty to use the vault's name.")
       .addText((t) =>
         t.setValue(this.plugin.settings.driveFolderName).onChange(async (v) => {
           this.plugin.settings.driveFolderName = v;
@@ -732,8 +752,8 @@ class DriveMergeSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Sync every N minutes")
-      .setDesc("0 means manual only (the ribbon button or the Sync now command).")
+      .setName("Sync interval (minutes)")
+      .setDesc("Set to 0 for manual sync only (ribbon button or the sync command).")
       .addSlider((s) =>
         s
           .setLimits(0, 120, 5)

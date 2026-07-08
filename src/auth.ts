@@ -3,10 +3,42 @@
 // party server ever sees the tokens; everything stays on this machine.
 
 import { Platform } from "obsidian";
-import type { Server } from "http";
 
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const SCOPE = "https://www.googleapis.com/auth/drive.file";
+
+// Minimal typings for the slice of Node's http module this file uses. The
+// module is loaded at runtime via window.require, desktop only — a static
+// import would break mobile loads, and Obsidian's review harness (which
+// type-checks without Node type definitions) could not type it anyway.
+interface LoopbackRequest {
+  url?: string;
+}
+
+interface LoopbackResponse {
+  writeHead(status: number, headers: Record<string, string>): void;
+  end(body: string): void;
+}
+
+interface LoopbackServer {
+  address(): { port: number } | string | null;
+  close(): void;
+  listen(port: number, host: string, onListening: () => void): void;
+  on(event: "error", listener: (e: Error) => void): void;
+}
+
+interface HttpModule {
+  createServer(
+    this: void,
+    handler: (req: LoopbackRequest, res: LoopbackResponse) => void
+  ): LoopbackServer;
+}
+
+function loadHttp(): HttpModule {
+  const req = (window as unknown as { require?: (m: string) => unknown }).require;
+  if (!req) throw new Error("Loopback sign-in needs the desktop app.");
+  return req("http") as HttpModule;
+}
 
 export interface AuthResult {
   code: string;
@@ -22,15 +54,18 @@ export async function startLoopbackAuth(
       "Sign in on a desktop first, then move the connection to this device with the connection code in settings."
     );
   }
-  // Imported lazily so the plugin loads cleanly on mobile, where this code
-  // path is never taken.
-  const { createServer } = (await import("http")) as typeof import("http");
+  const { createServer } = loadHttp();
   return new Promise((resolve, reject) => {
-    let server: Server | null = null;
-    const timeout = setTimeout(() => {
+    let server: LoopbackServer | null = null;
+    const timeout = window.setTimeout(() => {
       server?.close();
       reject(new Error("Sign-in timed out after five minutes."));
     }, 5 * 60 * 1000);
+
+    const portOf = (srv: LoopbackServer | null): number => {
+      const addr = srv?.address();
+      return typeof addr === "object" && addr ? addr.port : 0;
+    };
 
     server = createServer((req, res) => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -42,9 +77,8 @@ export async function startLoopbackAuth(
           ? "<h2>Connected. You can close this tab and return to Obsidian.</h2>"
           : `<h2>Sign-in failed${err ? `: ${err}` : ""}. Return to Obsidian and try again.</h2>`
       );
-      clearTimeout(timeout);
-      const addr = server?.address();
-      const port = typeof addr === "object" && addr ? addr.port : 0;
+      window.clearTimeout(timeout);
+      const port = portOf(server);
       server?.close();
       if (code) {
         resolve({ code, redirectUri: `http://127.0.0.1:${port}` });
@@ -54,9 +88,7 @@ export async function startLoopbackAuth(
     });
 
     server.listen(0, "127.0.0.1", () => {
-      const addr = server?.address();
-      const port = typeof addr === "object" && addr ? addr.port : 0;
-      const redirectUri = `http://127.0.0.1:${port}`;
+      const redirectUri = `http://127.0.0.1:${portOf(server)}`;
       const params = new URLSearchParams({
         client_id: clientId,
         redirect_uri: redirectUri,
@@ -69,7 +101,7 @@ export async function startLoopbackAuth(
     });
 
     server.on("error", (e) => {
-      clearTimeout(timeout);
+      window.clearTimeout(timeout);
       reject(e);
     });
   });
