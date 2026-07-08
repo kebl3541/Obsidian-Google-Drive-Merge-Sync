@@ -1,7 +1,7 @@
 {
   "id": "google-drive-merge-sync",
   "name": "Google Drive Merge Sync",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "minAppVersion": "1.7.2",
   "description": "Sync your vault with Google Drive using your own credentials. Text conflicts resolve by word level three way merge instead of conflicted copies, and deletes go to trash, never into the void.",
   "author": "kebl3541",
