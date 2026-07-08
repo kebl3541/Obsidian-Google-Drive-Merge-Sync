@@ -1,13 +1,13 @@
 {
-  "name": "drive-merge-sync",
-  "version": "0.2.0",
+  "name": "google-drive-merge-sync",
+  "version": "0.3.0",
   "description": "Google Drive sync for Obsidian with word level merge conflict resolution.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-    "test": "esbuild src/planner.ts --format=esm --outfile=test/planner.build.mjs && node test/planner.test.mjs && esbuild src/merge.ts --format=esm --outfile=test/merge.build.mjs && node -e \"import('./test/merge.build.mjs').then(m => { const r = m.merge3('a\\nb','a\\nB','a2\\nb'); if (r.merged !== 'a2\\nB') throw new Error('merge smoke failed'); console.log('merge: smoke passed'); })\"",
-    "deploy": "npm run build && npm test && cp main.js manifest.json styles.css \"/Users/simonaaimar/Desktop/AI SKILL/.obsidian/plugins/drive-merge-sync/\" && echo DEPLOY-OK"
+    "test": "esbuild src/planner.ts --format=esm --outfile=test/planner.build.mjs && node test/planner.test.mjs && esbuild src/merge.ts --format=esm --outfile=test/merge.build.mjs && node -e \"import('./test/merge.build.mjs').then(m => { const r = m.merge3('a\\nb','a\\nB','a2\\nb'); if (r.merged !== 'a2\\nB') throw new Error('merge smoke failed'); console.log('merge: smoke passed'); })\" && esbuild src/drive.ts --bundle --format=esm --outfile=test/drive.build.mjs --alias:obsidian=./test/obsidian-shim.mjs --external:node:* && node test/drive.integration.mjs",
+    "deploy": "npm run build && npm test && cp main.js manifest.json styles.css \"/Users/simonaaimar/Desktop/AI SKILL/.obsidian/plugins/google-drive-merge-sync/\" && echo DEPLOY-OK"
   },
   "keywords": [
     "obsidian",

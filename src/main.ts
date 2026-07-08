@@ -6,7 +6,7 @@ import {
   TFile,
   normalizePath,
 } from "obsidian";
-import { DriveClient, DriveTokens } from "./drive";
+import { DriveClient, DriveEndpoints, DriveTokens } from "./drive";
 import { startLoopbackAuth } from "./auth";
 import { BaseEntry, LocalEntry, RemoteEntry, planSync } from "./planner";
 import { merge3 } from "./merge";
@@ -16,6 +16,7 @@ interface DriveMergeSettings {
   clientSecret: string;
   driveFolderName: string;
   syncIntervalMinutes: number; // 0 = manual only
+  syncOnStartup: boolean;
   excludedFolders: string[];
 }
 
@@ -24,8 +25,13 @@ const DEFAULT_SETTINGS: DriveMergeSettings = {
   clientSecret: "",
   driveFolderName: "",
   syncIntervalMinutes: 0,
+  syncOnStartup: false,
   excludedFolders: [],
 };
+
+// How many uploads/downloads run at once. Drive tolerates this happily and
+// first syncs get several times faster than one-at-a-time.
+const TRANSFER_CONCURRENCY = 4;
 
 interface PersistedData {
   settings: DriveMergeSettings;
@@ -36,6 +42,14 @@ interface PersistedData {
 
 const TEXT_EXTENSIONS = new Set(["md", "txt", "json", "css", "csv", "canvas"]);
 
+function bytesEqual(a: ArrayBuffer, b: ArrayBuffer): boolean {
+  if (a.byteLength !== b.byteLength) return false;
+  const va = new Uint8Array(a);
+  const vb = new Uint8Array(b);
+  for (let i = 0; i < va.length; i++) if (va[i] !== vb[i]) return false;
+  return true;
+}
+
 export default class DriveMergeSyncPlugin extends Plugin {
   settings: DriveMergeSettings = DEFAULT_SETTINGS;
   private tokens: DriveTokens | null = null;
@@ -44,6 +58,8 @@ export default class DriveMergeSyncPlugin extends Plugin {
   private statusEl: HTMLElement | null = null;
   private syncing = false;
   private intervalHandle: number | null = null;
+  // Test hook: point the client at a mock Drive server instead of Google.
+  debugEndpoints: Partial<DriveEndpoints> | null = null;
 
   async onload() {
     await this.loadPersisted();
@@ -67,6 +83,12 @@ export default class DriveMergeSyncPlugin extends Plugin {
 
     this.addSettingTab(new DriveMergeSettingTab(this));
     this.applyInterval();
+
+    if (this.settings.syncOnStartup && this.tokens) {
+      this.app.workspace.onLayoutReady(() =>
+        window.setTimeout(() => void this.syncNow(), 3000)
+      );
+    }
   }
 
   onunload() {
@@ -169,7 +191,7 @@ export default class DriveMergeSyncPlugin extends Plugin {
       this.setStatus("connected");
       new Notice("Google Drive connected.");
     } catch (e) {
-      console.error("Drive Merge Sync: auth failed", e);
+      console.error("Google Drive Merge Sync: auth failed", e);
       new Notice(`Google sign-in failed: ${e instanceof Error ? e.message : e}`);
     }
   }
@@ -190,7 +212,8 @@ export default class DriveMergeSyncPlugin extends Plugin {
       (t) => {
         this.tokens = t;
         void this.persist();
-      }
+      },
+      this.debugEndpoints ?? undefined
     );
   }
 
@@ -244,6 +267,7 @@ export default class DriveMergeSyncPlugin extends Plugin {
           fileId: f.id,
           rev: f.md5Checksum ?? f.modifiedTime ?? "",
           size: Number(f.size ?? 0),
+          mtime: f.modifiedTime ? Date.parse(f.modifiedTime) : undefined,
         };
       }
 
@@ -265,10 +289,42 @@ export default class DriveMergeSyncPlugin extends Plugin {
       const folderCache = new Map<string, string>();
       let done = 0;
       let conflictsMerged = 0;
-      for (const action of actions) {
-        this.setStatus(`syncing ${++done}/${actions.length}…`);
-        await this.execute(drive, action, folderCache, () => conflictsMerged++);
+
+      // Renames, deletes, and conflicts run one at a time (they are rare and
+      // some touch merge state). Plain transfers run in a small pool.
+      const transfers = actions.filter(
+        (a) => a.kind.startsWith("upload") || a.kind.startsWith("download")
+      );
+      const serial = actions.filter((a) => !transfers.includes(a));
+
+      // Folder creation must not race, so all needed remote folders are
+      // ensured up front, one by one, before the parallel phase.
+      const rootId = this.rootFolderId as string;
+      for (const a of transfers) {
+        if (a.kind === "uploadNew" || a.kind === "uploadUpdate") {
+          const parts = a.path.split("/");
+          parts.pop();
+          if (parts.length) await drive.ensurePath(rootId, parts, folderCache);
+        }
       }
+
+      for (const action of serial) {
+        this.setStatus(`syncing ${++done}/${actions.length}…`);
+        await this.execute(drive, action, folderCache, remote, () => conflictsMerged++);
+      }
+
+      const queue = [...transfers];
+      const worker = async () => {
+        for (;;) {
+          const action = queue.shift();
+          if (!action) return;
+          this.setStatus(`syncing ${++done}/${actions.length}…`);
+          await this.execute(drive, action, folderCache, remote, () => conflictsMerged++);
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(TRANSFER_CONCURRENCY, queue.length) }, worker)
+      );
 
       // Refresh the base index from the now agreed state.
       await this.rebuildBase(drive);
@@ -282,7 +338,7 @@ export default class DriveMergeSyncPlugin extends Plugin {
         );
       }
     } catch (e) {
-      console.error("Drive Merge Sync failed", e);
+      console.error("Google Drive Merge Sync failed", e);
       this.setStatus("sync failed");
       new Notice(`Drive sync failed: ${e instanceof Error ? e.message : e}`);
     } finally {
@@ -326,6 +382,7 @@ export default class DriveMergeSyncPlugin extends Plugin {
     drive: DriveClient,
     action: ReturnType<typeof planSync>[number],
     folderCache: Map<string, string>,
+    remote: Record<string, RemoteEntry>,
     onMerge: () => void
   ) {
     const rootId = this.rootFolderId as string;
@@ -411,10 +468,11 @@ export default class DriveMergeSyncPlugin extends Plugin {
         }
         const f = this.app.vault.getAbstractFileByPath(action.path);
         if (f instanceof TFile) {
+          const st = await this.freshStat(f);
           this.base[action.path] = {
             fileId: action.fileId,
-            localMtime: f.stat.mtime,
-            localSize: f.stat.size,
+            localMtime: st.mtime,
+            localSize: st.size,
             remoteRev: "", // filled by rebuildBase
           };
           if (this.isTextPath(action.path)) {
@@ -439,7 +497,14 @@ export default class DriveMergeSyncPlugin extends Plugin {
       }
 
       case "conflict": {
-        await this.resolveConflict(drive, action.path, action.fileId, folderCache, onMerge);
+        await this.resolveConflict(
+          drive,
+          action.path,
+          action.fileId,
+          folderCache,
+          remote[action.path]?.mtime ?? 0,
+          onMerge
+        );
         return;
       }
     }
@@ -451,21 +516,33 @@ export default class DriveMergeSyncPlugin extends Plugin {
     path: string,
     fileId: string,
     folderCache: Map<string, string>,
+    remoteMtime: number,
     onMerge: () => void
   ) {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) return;
 
     const remoteBytes = await drive.download(fileId);
+    const localBytes = await this.app.vault.readBinary(file);
+
+    // Identical bytes on both sides: adopt silently, no upload. This is what
+    // makes connecting a second device that already holds the vault painless.
+    if (bytesEqual(localBytes, remoteBytes)) {
+      this.base[path] = {
+        fileId,
+        localMtime: file.stat.mtime,
+        localSize: file.stat.size,
+        remoteRev: "", // filled by rebuildBase
+      };
+      if (this.isTextPath(path)) {
+        await this.writeBaseCopy(path, await this.app.vault.read(file));
+      }
+      return;
+    }
 
     if (this.isTextPath(path)) {
       const localText = await this.app.vault.read(file);
       const remoteText = new TextDecoder().decode(remoteBytes);
-      if (localText === remoteText) {
-        // Same content on both sides: agree silently.
-        await this.finishConflict(drive, path, fileId, localText, folderCache, file);
-        return;
-      }
       const baseText = (await this.readBaseCopy(path)) ?? "";
       const { merged, conflicts } = merge3(baseText, localText, remoteText);
       await this.app.vault.modify(file, merged);
@@ -479,24 +556,38 @@ export default class DriveMergeSyncPlugin extends Plugin {
       return;
     }
 
-    // Binary conflict: newer wins, the loser survives as a conflict copy.
-    const remoteEntryTime = 0; // unknown here; local wins ties by design
-    const localNewer = file.stat.mtime >= remoteEntryTime;
-    if (localNewer) {
+    // Binary conflict: newer side wins, the loser survives as a conflict copy.
+    if (file.stat.mtime >= remoteMtime) {
       const parts = path.split("/");
       const name = parts.pop() as string;
       const parentId = await drive.ensurePath(this.rootFolderId as string, parts, folderCache);
-      const up = await drive.upload(name, parentId, await this.app.vault.readBinary(file), fileId);
+      const up = await drive.upload(name, parentId, localBytes, fileId);
       this.base[path] = {
         fileId: up.id,
         localMtime: file.stat.mtime,
+        localSize: file.stat.size,
         remoteRev: up.md5Checksum ?? "",
       };
     } else {
       const copyPath = path.replace(/(\.[^.]*)?$/, ` (conflict ${Date.now()})$1`);
-      await this.app.vault.createBinary(normalizePath(copyPath), await this.app.vault.readBinary(file));
+      await this.app.vault.createBinary(normalizePath(copyPath), localBytes);
       await this.app.vault.modifyBinary(file, remoteBytes);
+      const st = await this.freshStat(file);
+      this.base[path] = {
+        fileId,
+        localMtime: st.mtime,
+        localSize: st.size,
+        remoteRev: "", // filled by rebuildBase
+      };
     }
+  }
+
+  // TFile.stat refreshes asynchronously after a write, so mtime read from it
+  // right after vault.modify can be stale; the disk is the truth. A stale
+  // mtime in base breaks exact-match rename detection on the next sync.
+  private async freshStat(file: TFile): Promise<{ mtime: number; size: number }> {
+    const st = await this.app.vault.adapter.stat(file.path);
+    return st ? { mtime: st.mtime, size: st.size } : file.stat;
   }
 
   private async finishConflict(
@@ -516,9 +607,11 @@ export default class DriveMergeSyncPlugin extends Plugin {
       new TextEncoder().encode(content).buffer as ArrayBuffer,
       fileId
     );
+    const st = await this.freshStat(file);
     this.base[path] = {
       fileId: up.id,
-      localMtime: file.stat.mtime,
+      localMtime: st.mtime,
+      localSize: st.size,
       remoteRev: up.md5Checksum ?? "",
     };
     await this.writeBaseCopy(path, content);
@@ -650,6 +743,16 @@ class DriveMergeSettingTab extends PluginSettingTab {
             await this.plugin.persist();
             this.plugin.applyInterval();
           })
+      );
+
+    new Setting(containerEl)
+      .setName("Sync on startup")
+      .setDesc("Run a sync a few seconds after the app opens.")
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.syncOnStartup).onChange(async (v) => {
+          this.plugin.settings.syncOnStartup = v;
+          await this.plugin.persist();
+        })
       );
 
     new Setting(containerEl)

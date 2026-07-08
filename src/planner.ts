@@ -23,6 +23,7 @@ export interface RemoteEntry {
   fileId: string;
   rev: string;
   size: number;
+  mtime?: number; // epoch ms, when Drive reported modifiedTime
 }
 
 export type SyncAction =

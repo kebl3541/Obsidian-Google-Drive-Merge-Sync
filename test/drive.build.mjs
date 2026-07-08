@@ -1,81 +1,61 @@
-// Minimal Google Drive v3 client over Obsidian's requestUrl (no CORS pain).
-// Scope drive.file: the plugin only ever sees files and folders it created,
-// which is exactly the vault mirror and nothing else in anyone's Drive.
-
-import { requestUrl } from "obsidian";
-
-const API = "https://www.googleapis.com/drive/v3";
-const UPLOAD = "https://www.googleapis.com/upload/drive/v3";
-const TOKEN_URL = "https://oauth2.googleapis.com/token";
-
-// Swappable for tests: a local mock server can stand in for Google.
-export interface DriveEndpoints {
-  api: string;
-  upload: string;
-  token: string;
+// test/obsidian-shim.mjs
+async function requestUrl(opts) {
+  const { url, method = "GET", headers = {}, contentType, body } = opts;
+  const doThrow = opts.throw !== false;
+  const h = { ...headers };
+  if (contentType)
+    h["Content-Type"] = contentType;
+  const res = await fetch(url, {
+    method,
+    headers: h,
+    body: body instanceof ArrayBuffer ? Buffer.from(body) : body
+  });
+  const arrayBuffer = await res.arrayBuffer();
+  const text = new TextDecoder().decode(arrayBuffer);
+  let json = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+  }
+  if (doThrow && res.status >= 400) {
+    throw new Error(`Request failed, status ${res.status}`);
+  }
+  return { status: res.status, arrayBuffer, text, json };
 }
 
-const DEFAULT_ENDPOINTS: DriveEndpoints = {
+// src/drive.ts
+var API = "https://www.googleapis.com/drive/v3";
+var UPLOAD = "https://www.googleapis.com/upload/drive/v3";
+var TOKEN_URL = "https://oauth2.googleapis.com/token";
+var DEFAULT_ENDPOINTS = {
   api: API,
   upload: UPLOAD,
-  token: TOKEN_URL,
+  token: TOKEN_URL
 };
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-export interface DriveTokens {
-  accessToken: string;
-  refreshToken: string;
-  expiresAt: number; // epoch ms
-}
-
-export interface DriveFile {
-  id: string;
-  name: string;
-  mimeType: string;
-  md5Checksum?: string;
-  size?: string;
-  modifiedTime?: string;
-}
-
-export class DriveClient {
-  private ep: DriveEndpoints;
-
-  constructor(
-    private clientId: string,
-    private clientSecret: string,
-    private tokens: DriveTokens,
-    private onTokens: (t: DriveTokens) => void,
-    endpoints?: Partial<DriveEndpoints>
-  ) {
+var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+var DriveClient = class {
+  constructor(clientId, clientSecret, tokens, onTokens, endpoints) {
+    this.clientId = clientId;
+    this.clientSecret = clientSecret;
+    this.tokens = tokens;
+    this.onTokens = onTokens;
     this.ep = { ...DEFAULT_ENDPOINTS, ...endpoints };
   }
-
-  static async exchangeCode(
-    clientId: string,
-    clientSecret: string,
-    code: string,
-    redirectUri: string,
-    tokenUrl = TOKEN_URL
-  ): Promise<DriveTokens> {
+  static async exchangeCode(clientId, clientSecret, code, redirectUri, tokenUrl = TOKEN_URL) {
     const body = new URLSearchParams({
       client_id: clientId,
       client_secret: clientSecret,
       code,
       grant_type: "authorization_code",
-      redirect_uri: redirectUri,
+      redirect_uri: redirectUri
     }).toString();
     const res = await requestUrl({
       url: tokenUrl,
       method: "POST",
       contentType: "application/x-www-form-urlencoded",
-      body,
+      body
     });
-    const j = res.json as {
-      access_token: string;
-      refresh_token?: string;
-      expires_in: number;
-    };
+    const j = res.json;
     if (!j.refresh_token) {
       throw new Error(
         "Google returned no refresh token. Remove the app's access at myaccount.google.com/permissions and connect again."
@@ -84,40 +64,40 @@ export class DriveClient {
     return {
       accessToken: j.access_token,
       refreshToken: j.refresh_token,
-      expiresAt: Date.now() + (j.expires_in - 60) * 1000,
+      expiresAt: Date.now() + (j.expires_in - 60) * 1e3
     };
   }
-
-  private async token(): Promise<string> {
-    if (Date.now() < this.tokens.expiresAt) return this.tokens.accessToken;
+  async token() {
+    if (Date.now() < this.tokens.expiresAt)
+      return this.tokens.accessToken;
     const body = new URLSearchParams({
       client_id: this.clientId,
       client_secret: this.clientSecret,
       refresh_token: this.tokens.refreshToken,
-      grant_type: "refresh_token",
+      grant_type: "refresh_token"
     }).toString();
     const res = await requestUrl({
       url: this.ep.token,
       method: "POST",
       contentType: "application/x-www-form-urlencoded",
-      body,
+      body
     });
-    const j = res.json as { access_token: string; expires_in: number };
+    const j = res.json;
     this.tokens = {
       ...this.tokens,
       accessToken: j.access_token,
-      expiresAt: Date.now() + (j.expires_in - 60) * 1000,
+      expiresAt: Date.now() + (j.expires_in - 60) * 1e3
     };
     this.onTokens(this.tokens);
     return this.tokens.accessToken;
   }
-
   // Rate limits and transient server errors retry with exponential backoff
   // instead of failing the whole sync over one hiccup.
-  private async call(url: string, init?: { method?: string; body?: string | ArrayBuffer; contentType?: string }) {
-    let lastErr: unknown = null;
+  async call(url, init) {
+    let lastErr = null;
     for (let attempt = 0; attempt < 4; attempt++) {
-      if (attempt > 0) await sleep(500 * 2 ** attempt);
+      if (attempt > 0)
+        await sleep(500 * 2 ** attempt);
       const t = await this.token();
       let res;
       try {
@@ -127,13 +107,14 @@ export class DriveClient {
           headers: { Authorization: `Bearer ${t}` },
           contentType: init?.contentType,
           body: init?.body,
-          throw: false,
+          throw: false
         });
       } catch (e) {
         lastErr = e;
         continue;
       }
-      if (res.status < 300) return res;
+      if (res.status < 300)
+        return res;
       if (res.status === 429 || res.status >= 500 || res.status === 403) {
         lastErr = new Error(`Drive returned ${res.status}`);
         continue;
@@ -142,31 +123,30 @@ export class DriveClient {
     }
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
   }
-
-  async ensureFolder(name: string, parentId?: string): Promise<string> {
+  async ensureFolder(name, parentId) {
     const parent = parentId ?? "root";
     const q = encodeURIComponent(
       `name = '${name.replace(/'/g, "\\'")}' and mimeType = 'application/vnd.google-apps.folder' and '${parent}' in parents and trashed = false`
     );
     const found = await this.call(`${this.ep.api}/files?q=${q}&fields=files(id,name)`);
-    const files = (found.json as { files: DriveFile[] }).files;
-    if (files.length > 0) return files[0].id;
+    const files = found.json.files;
+    if (files.length > 0)
+      return files[0].id;
     const created = await this.call(`${this.ep.api}/files?fields=id`, {
       method: "POST",
       contentType: "application/json",
       body: JSON.stringify({
         name,
         mimeType: "application/vnd.google-apps.folder",
-        parents: [parent],
-      }),
+        parents: [parent]
+      })
     });
-    return (created.json as { id: string }).id;
+    return created.json.id;
   }
-
   // List every descendant of the root folder, returning vault-relative paths.
-  async listTree(rootId: string): Promise<Map<string, DriveFile & { path: string }>> {
-    const out = new Map<string, DriveFile & { path: string }>();
-    const walk = async (folderId: string, prefix: string) => {
+  async listTree(rootId) {
+    const out = /* @__PURE__ */ new Map();
+    const walk = async (folderId, prefix) => {
       let pageToken = "";
       do {
         const q = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
@@ -176,7 +156,7 @@ export class DriveClient {
         const res = await this.call(
           `${this.ep.api}/files?q=${q}&fields=${fields}&pageSize=1000${pageToken ? `&pageToken=${pageToken}` : ""}`
         );
-        const j = res.json as { files: DriveFile[]; nextPageToken?: string };
+        const j = res.json;
         for (const f of j.files) {
           const path = prefix ? `${prefix}/${f.name}` : f.name;
           if (f.mimeType === "application/vnd.google-apps.folder") {
@@ -191,26 +171,24 @@ export class DriveClient {
     await walk(rootId, "");
     return out;
   }
-
-  async download(fileId: string): Promise<ArrayBuffer> {
+  async download(fileId) {
     const res = await this.call(`${this.ep.api}/files/${fileId}?alt=media`);
     return res.arrayBuffer;
   }
-
   // Create or update a file with multipart upload (metadata + bytes).
-  async upload(
-    name: string,
-    parentId: string,
-    content: ArrayBuffer,
-    existingId?: string
-  ): Promise<{ id: string; md5Checksum?: string }> {
+  async upload(name, parentId, content, existingId) {
     const boundary = "dms" + Math.random().toString(36).slice(2);
     const meta = existingId ? { name } : { name, parents: [parentId] };
-    const head =
-      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
-      JSON.stringify(meta) +
-      `\r\n--${boundary}\r\nContent-Type: application/octet-stream\r\n\r\n`;
-    const tail = `\r\n--${boundary}--`;
+    const head = `--${boundary}\r
+Content-Type: application/json; charset=UTF-8\r
+\r
+` + JSON.stringify(meta) + `\r
+--${boundary}\r
+Content-Type: application/octet-stream\r
+\r
+`;
+    const tail = `\r
+--${boundary}--`;
     const enc = new TextEncoder();
     const headB = enc.encode(head);
     const tailB = enc.encode(tail);
@@ -218,42 +196,34 @@ export class DriveClient {
     body.set(headB, 0);
     body.set(new Uint8Array(content), headB.length);
     body.set(tailB, headB.length + content.byteLength);
-
-    const url = existingId
-      ? `${this.ep.upload}/files/${existingId}?uploadType=multipart&fields=id,md5Checksum`
-      : `${this.ep.upload}/files?uploadType=multipart&fields=id,md5Checksum`;
+    const url = existingId ? `${this.ep.upload}/files/${existingId}?uploadType=multipart&fields=id,md5Checksum` : `${this.ep.upload}/files?uploadType=multipart&fields=id,md5Checksum`;
     const res = await this.call(url, {
       method: existingId ? "PATCH" : "POST",
       contentType: `multipart/related; boundary=${boundary}`,
-      body: body.buffer,
+      body: body.buffer
     });
-    return res.json as { id: string; md5Checksum?: string };
+    return res.json;
   }
-
   // Rename and, if needed, move a file to a different parent folder.
-  async move(fileId: string, newName: string, newParentId: string): Promise<void> {
+  async move(fileId, newName, newParentId) {
     const cur = await this.call(`${this.ep.api}/files/${fileId}?fields=parents`);
-    const parents = ((cur.json as { parents?: string[] }).parents ?? []).join(",");
-    const q = parents
-      ? `?addParents=${newParentId}&removeParents=${parents}`
-      : `?addParents=${newParentId}`;
+    const parents = (cur.json.parents ?? []).join(",");
+    const q = parents ? `?addParents=${newParentId}&removeParents=${parents}` : `?addParents=${newParentId}`;
     await this.call(`${this.ep.api}/files/${fileId}${q}`, {
       method: "PATCH",
       contentType: "application/json",
-      body: JSON.stringify({ name: newName }),
+      body: JSON.stringify({ name: newName })
     });
   }
-
-  async trash(fileId: string): Promise<void> {
+  async trash(fileId) {
     await this.call(`${this.ep.api}/files/${fileId}`, {
       method: "PATCH",
       contentType: "application/json",
-      body: JSON.stringify({ trashed: true }),
+      body: JSON.stringify({ trashed: true })
     });
   }
-
   // Ensure nested folders exist for a path like "notes/daily/2026".
-  async ensurePath(rootId: string, folders: string[], cache: Map<string, string>): Promise<string> {
+  async ensurePath(rootId, folders, cache) {
     let parent = rootId;
     let key = "";
     for (const part of folders) {
@@ -268,4 +238,7 @@ export class DriveClient {
     }
     return parent;
   }
-}
+};
+export {
+  DriveClient
+};
