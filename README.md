@@ -23,18 +23,28 @@ continued development, please use the buttons below:</p>
 <p align="center">If you like this plugin or find it useful, please consider giving it a <a href="https://github.com/kebl3541/Obsidian-Google-Drive-Merge-Sync">star</a> <a href="https://github.com/kebl3541/Obsidian-Google-Drive-Merge-Sync"><img src="https://img.shields.io/github/stars/kebl3541/Obsidian-Google-Drive-Merge-Sync?style=social" alt="GitHub Repo stars"></a> on GitHub!</p>
 
 
-## Why it is different
+## How it works
 
-- **Conflicts are merged, not duplicated.** Text files resolve by word level
-  three way merge against the last synced version. The merge engine is shared
+- **Every sync starts with a plan.** The plugin compares three states of each
+  file: your local copy, the Drive copy, and the last version both sides
+  agreed on. From those it decides, per file, whether to upload, download,
+  merge, rename, or do nothing. You can see the plan without running it: the
+  dry run command lists exactly what a sync would do before it does anything.
+- **Conflicts are merged, not duplicated.** When the same note changed on two
+  devices, the two versions are combined by a word level three way merge
+  against the last synced version. Only where both sides changed the very
+  same words does it keep your side and tell you. The merge engine is shared
   with the AI Co-Editor plugin and covered by its test suite.
-- **Nothing is ever destroyed.** Deletes travel to Obsidian's trash locally
-  and to the Drive trash remotely. Both are reversible.
-- **Your credentials, your Drive.** You create a free Google OAuth client;
-  tokens live on your machine; the plugin can only see the one folder it
-  creates, thanks to the narrow drive.file permission.
-- **Dry run first.** A command shows exactly what a sync would do before it
-  does anything.
+- **Deletes go to the trash, on both sides.** A file removed on one device is
+  moved to Obsidian's trash locally (following your deletion preference) and
+  to the Drive trash remotely. Both are reversible.
+- **It talks to Drive with your own credentials.** You create a free Google
+  OAuth client once; tokens stay on your machine and are never sent to any
+  third party. The `drive.file` permission means the plugin can only see the
+  one folder it creates in your Drive, nothing else.
+- **Other devices join with a connection code.** Generate the code on the
+  connected device, paste it on the new one (that's how mobile connects,
+  since the sign-in flow needs a desktop).
 
 ## Setup, once, about five minutes
 
