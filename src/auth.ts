@@ -45,6 +45,21 @@ export interface AuthResult {
   redirectUri: string;
 }
 
+// Google's raw error codes read as gibberish at the worst moment; translate
+// the ones people actually hit into the fix.
+function explainAuthError(err: string | null): string {
+  switch (err) {
+    case "access_denied":
+      return "Google blocked the sign-in (access_denied). Almost always this means the Google account you picked is not on the app's test users list. Open the setup wizard, use the link in step 4 to add that exact address as a test user, then sign in again with the same account.";
+    case "invalid_client":
+      return "Google does not recognize the client ID (invalid_client). Re-download the client JSON from the Google console and paste it into the setup wizard again.";
+    case null:
+      return "No authorization code returned.";
+    default:
+      return `Google sign-in failed (${err}).`;
+  }
+}
+
 export async function startLoopbackAuth(
   clientId: string,
   onUrl: (url: string) => void
@@ -83,7 +98,7 @@ export async function startLoopbackAuth(
       if (code) {
         resolve({ code, redirectUri: `http://127.0.0.1:${port}` });
       } else {
-        reject(new Error(err ?? "No authorization code returned."));
+        reject(new Error(explainAuthError(err)));
       }
     });
 

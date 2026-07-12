@@ -38,8 +38,13 @@ const STEPS: Array<{ text: string; url: string }> = [
     url: "https://console.cloud.google.com/apis/library/drive.googleapis.com",
   },
   {
-    text: "Configure consent: choose External, then add your own email as a test user.",
+    text: "Configure consent: if asked, choose External and fill only the required fields.",
     url: "https://console.cloud.google.com/auth/overview",
+  },
+  {
+    text:
+      "Add yourself as a test user: Audience → Test users → Add users → the exact Google address you will sign in with. Skipping this is what causes \"access denied / you are not allowed\".",
+    url: "https://console.cloud.google.com/auth/audience",
   },
   {
     text: "Create the client: application type Desktop app, then Download JSON.",
@@ -77,7 +82,7 @@ export class ConnectWizard extends Modal {
     }
 
     contentEl.createEl("p", {
-      text: "5.  Paste what you got — the whole downloaded JSON file, or the client ID and secret together in any form:",
+      text: "6.  Paste what you got — the whole downloaded JSON file, or the client ID and secret together in any form:",
       cls: "dms-wizard-paste-label",
     });
     const ta = contentEl.createEl("textarea", {
@@ -89,7 +94,7 @@ export class ConnectWizard extends Modal {
 
     new Setting(contentEl)
       .setName("Sign in with Google")
-      .setDesc("Opens your browser for consent, then the plugin is connected.")
+      .setDesc("Opens your browser. Pick the same Google account you added as a test user in step 4.")
       .addButton((b) => {
         this.signInButton = b;
         b.setButtonText("Sign in with Google")

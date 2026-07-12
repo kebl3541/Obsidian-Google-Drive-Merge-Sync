@@ -1,6 +1,6 @@
 {
   "name": "google-drive-merge-sync",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Google Drive sync for Obsidian with word level merge conflict resolution.",
   "main": "main.js",
   "scripts": {
