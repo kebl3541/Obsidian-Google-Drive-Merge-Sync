@@ -1,4 +1,5 @@
 import {
+  FileView,
   Notice,
   Plugin,
   PluginSettingTab,
@@ -8,6 +9,7 @@ import {
 } from "obsidian";
 import { DriveClient, DriveEndpoints, DriveTokens } from "./drive";
 import { startLoopbackAuth } from "./auth";
+import { ConnectWizard } from "./wizard";
 import { BaseEntry, LocalEntry, RemoteEntry, planSync } from "./planner";
 import { merge3 } from "./merge";
 
@@ -73,6 +75,8 @@ export default class DriveMergeSyncPlugin extends Plugin {
   private statusEl: HTMLElement | null = null;
   private syncing = false;
   private intervalHandle: number | null = null;
+  private seenViews = new WeakSet<object>();
+  private headerButtons = new Set<HTMLElement>();
   // Test hook: point the client at a mock Drive server instead of Google.
   debugEndpoints: Partial<DriveEndpoints> | null = null;
 
@@ -99,6 +103,12 @@ export default class DriveMergeSyncPlugin extends Plugin {
     this.addSettingTab(new DriveMergeSettingTab(this));
     this.applyInterval();
 
+    // One cloud button in every note pane header: sync when connected,
+    // open the setup wizard when not.
+    this.registerEvent(this.app.workspace.on("layout-change", () => this.ensureHeaderButtons()));
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.ensureHeaderButtons()));
+    this.app.workspace.onLayoutReady(() => this.ensureHeaderButtons());
+
     if (this.settings.syncOnStartup && this.tokens) {
       this.app.workspace.onLayoutReady(() =>
         window.setTimeout(() => void this.syncNow(), 3000)
@@ -108,6 +118,27 @@ export default class DriveMergeSyncPlugin extends Plugin {
 
   onunload() {
     if (this.intervalHandle !== null) window.clearInterval(this.intervalHandle);
+    for (const el of this.headerButtons) el.detach();
+    this.headerButtons.clear();
+  }
+
+  get connected(): boolean {
+    return this.tokens !== null;
+  }
+
+  private ensureHeaderButtons() {
+    for (const type of ["markdown", "pdf"]) {
+      for (const leaf of this.app.workspace.getLeavesOfType(type)) {
+        const view = leaf.view;
+        if (!(view instanceof FileView) || this.seenViews.has(view)) continue;
+        this.seenViews.add(view);
+        const el = view.addAction("cloud", "Sync with Google Drive", () => {
+          if (this.connected) void this.syncNow();
+          else new ConnectWizard(this).open();
+        });
+        this.headerButtons.add(el);
+      }
+    }
   }
 
   applyInterval() {
@@ -186,7 +217,7 @@ export default class DriveMergeSyncPlugin extends Plugin {
 
   async connect() {
     if (!this.settings.clientId || !this.settings.clientSecret) {
-      new Notice("Enter your Google client ID and secret first (see the setup guide in settings).");
+      new ConnectWizard(this).open();
       return;
     }
     try {
@@ -252,7 +283,7 @@ export default class DriveMergeSyncPlugin extends Plugin {
     }
     const drive = this.client();
     if (!drive) {
-      new Notice("Connect Google Drive first, in the plugin settings.");
+      new ConnectWizard(this).open();
       return;
     }
     this.syncing = true;
@@ -678,9 +709,16 @@ class DriveMergeSettingTab extends PluginSettingTab {
     containerEl.empty();
 
     new Setting(containerEl)
+      .setName("Set up")
+      .setDesc("The wizard walks through the one-time Google setup: four links, one paste, one sign-in.")
+      .addButton((b) =>
+        b.setButtonText("Open setup wizard").setCta().onClick(() => new ConnectWizard(this.plugin).open())
+      );
+
+    new Setting(containerEl)
       .setName("Google client ID")
       .setDesc(
-        "Create a free OAuth client of type Desktop app at console.cloud.google.com (APIs and Services, Credentials). The README walks through it in five minutes. Your credentials stay on this machine."
+        "Filled automatically by the wizard; edit only if you manage credentials by hand. They stay on this machine."
       )
       .addText((t) =>
         t.setValue(this.plugin.settings.clientId).onChange(async (v) => {

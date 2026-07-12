@@ -50,6 +50,13 @@ continued development, please use the buttons below:</p>
 
 ## Setup, once, about five minutes
 
+Click the cloud button in any note's header (or "Open setup wizard" in the
+plugin settings). The wizard walks you through it: four links into the Google
+console, one paste, one sign-in. The client_secret JSON file Google offers for
+download can be pasted as is; the wizard picks out the two values itself.
+
+The same steps by hand, if you prefer:
+
 1. Go to console.cloud.google.com and create a project (any name).
 2. APIs and Services, Library: enable the Google Drive API.
 3. APIs and Services, OAuth consent screen: External, fill the two required
@@ -61,7 +68,8 @@ continued development, please use the buttons below:</p>
 
 ## Use
 
-- Click the sync icon in the ribbon, or run the command "Sync now".
+- Click the cloud button in a note's header, the sync icon in the ribbon, or
+  run the command "Sync now".
 - Optionally set an interval in settings for automatic syncing.
 - "Preview what a sync would do" shows the plan without touching anything.
 - On a second device, install the plugin, connect with the same Google

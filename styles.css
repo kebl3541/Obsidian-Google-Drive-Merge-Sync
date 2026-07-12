@@ -1,1 +1,29 @@
-/* Drive Merge Sync uses native UI components; no custom styles yet. */
+.dms-wizard-intro {
+  color: var(--text-muted);
+}
+
+.dms-wizard-steps li {
+  margin-bottom: 8px;
+}
+
+.dms-wizard-paste-label {
+  margin-bottom: 4px;
+}
+
+.dms-wizard-paste {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+}
+
+.dms-wizard-status {
+  min-height: 1.4em;
+  margin: 6px 0 2px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-error);
+}
+
+.dms-wizard-status.dms-ok {
+  color: var(--color-green);
+}
